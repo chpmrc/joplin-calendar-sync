@@ -1,15 +1,14 @@
+import base64
 import hashlib
-import json
 import os
 import pickle
+import re
 import time
 from datetime import date, datetime, timedelta
 
-import re
 import boto3
 from dateutil import parser
 from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 BASE_DIR = "/tmp"
@@ -20,23 +19,7 @@ AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET", "")
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "60"))
 LOOKAHEAD_SECONDS = int(os.getenv("LOOKAHEAD_SECONDS", "60"))
 
-OAUTH_CLIENT_ID = os.getenv("OAUTH_CLIENT_ID", "")
-OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "")
-OAUTH_PROJECT_ID = os.getenv("OAUTH_PROJECT_ID", "")
-OAUTH_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-OAUTH_CONFIG = f"""
-    {{
-        "installed": {{
-            "client_id": "{OAUTH_CLIENT_ID}",
-            "project_id": "{OAUTH_PROJECT_ID}",
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "client_secret": "{OAUTH_CLIENT_SECRET}",
-            "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob", "http://localhost"]
-        }}
-    }}
-"""
+OAUTH_TOKEN_B64 = os.getenv("OAUTH_TOKEN_B64", "")
 CALENDAR_NAME = os.getenv("CALENDAR_NAME", "")
 UTC_UNIX_EPOCH = datetime.utcfromtimestamp(0)
 
@@ -79,27 +62,13 @@ t2d = datetime.utcfromtimestamp
 
 
 def fetch_calendar_events():
-    creds = None
-    # The file token.pickle stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    token_path = f"{BASE_DIR}/token.pickle"
-    if os.path.exists(token_path):
-        with open(token_path, "rb") as token:
-            creds = pickle.load(token)
-    # If there are no (valid) credentials available, let the user log in.
+    token = base64.decodebytes(OAUTH_TOKEN_B64.encode("utf8"))
+    creds = pickle.loads(token)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            client_config = json.loads(OAUTH_CONFIG)
-            flow = InstalledAppFlow.from_client_config(
-                client_config, scopes=OAUTH_SCOPES
-            )
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open(token_path, "wb") as token:
-            pickle.dump(creds, token)
+            raise ValueError("Invalid OAuth token")
     service = build("calendar", "v3", credentials=creds)
     # 'Z' indicates UTC time
     now = datetime.utcnow()
@@ -195,6 +164,9 @@ def _update_entry(s3key, name, iso_now, due):
 
 
 def main():
+    if not OAUTH_TOKEN_B64:
+        print("Please run gimme_token.py where there's a browser :(")
+        return
     while True:
         events = fetch_calendar_events()
         if events:
