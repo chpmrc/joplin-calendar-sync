@@ -115,7 +115,7 @@ def create_joplin_entries(events):
             if not content:
                 continue
             print(f"Updating task {s3key} for event {name}")
-        except s3client.exceptions.NoSuchKey:
+        except:
             todo = JOPLIN_TODO_TEMPLATE.format(
                 name=name,
                 description=description,
