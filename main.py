@@ -128,7 +128,7 @@ def create_joplin_entries(events):
                 source_url="https://google.com",
                 user_created_time=iso_now,
                 user_updated_time=iso_now,
-                todo_due=int(due.timestamp() * 1000)
+                todo_due=int((due - due.utcoffset()).replace(tzinfo=None).timestamp() * 1000)
             ).strip("\n")
             content = todo.encode("utf8")
             print(f"Creating task {s3key} for event {name}")
@@ -147,7 +147,7 @@ def _update_entry(s3key, name, iso_now, due):
     # Must update update_time to force resync
     for idx, line in enumerate(content.split("\n")):
         if "todo_due" in line:
-            line = f"todo_due: {int(due.timestamp() * 1000)}"
+            line = f"todo_due: {int(utc_due.timestamp() * 1000)}"
         if "todo_completed" in line and utc_due != todo_due:
             line = "todo_completed: 0"
         if idx == 0:
