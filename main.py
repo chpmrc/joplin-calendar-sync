@@ -4,6 +4,7 @@ import os
 import pickle
 import re
 import time
+import traceback
 from datetime import date, datetime, timedelta
 
 import boto3
@@ -16,8 +17,6 @@ BASE_DIR = "/tmp"
 AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY", "")
 AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY", "")
 AWS_S3_BUCKET = os.getenv("AWS_S3_BUCKET", "")
-POLL_SECONDS = int(os.getenv("POLL_SECONDS", "60"))
-LOOKAHEAD_SECONDS = int(os.getenv("LOOKAHEAD_SECONDS", "60"))
 
 OAUTH_TOKEN_B64 = os.getenv("OAUTH_TOKEN_B64", "")
 CALENDAR_NAME = os.getenv("CALENDAR_NAME", "")
@@ -55,10 +54,24 @@ is_shared: 0
 type_: 1
 """
 
+POLL_SECONDS = int(os.getenv("POLL_SECONDS", "60"))
+LOOKAHEAD_SECONDS = int(os.getenv("LOOKAHEAD_SECONDS", "60"))
+
 s3client = boto3.client(
     "s3", aws_access_key_id=AWS_ACCESS_KEY, aws_secret_access_key=AWS_SECRET_KEY
 )
 t2d = datetime.utcfromtimestamp
+
+
+def main():
+    if not OAUTH_TOKEN_B64:
+        print("Please run gimme_token.py where there's a browser :(")
+        return
+    while True:
+        events = fetch_calendar_events()
+        if events:
+            create_joplin_entries(events)
+        time.sleep(POLL_SECONDS)
 
 
 def fetch_calendar_events():
@@ -105,7 +118,7 @@ def create_joplin_entries(events):
         name = f'{event["summary"]}'
         description = (
             f"{event.get('description', '')}"
-            "\n---\n"
+            "\n\n---\n"
             f"<sup>Synced from your [calendar]({event['htmlLink']})</sup>"
         )
         id = hashlib.sha256(event["id"].encode("utf8")).hexdigest()[:JOPLIN_ID_LEN]
@@ -115,7 +128,8 @@ def create_joplin_entries(events):
             if not content:
                 continue
             print(f"Updating task {s3key} for event {name}")
-        except:
+        except Exception as e:
+            traceback.print_exc()
             todo = JOPLIN_TODO_TEMPLATE.format(
                 name=name,
                 description=description,
@@ -128,18 +142,24 @@ def create_joplin_entries(events):
                 source_url="https://google.com",
                 user_created_time=iso_now,
                 user_updated_time=iso_now,
-                todo_due=int((due - due.utcoffset()).replace(tzinfo=None).timestamp() * 1000)
+                todo_due=int(
+                    (due - due.utcoffset()).replace(tzinfo=None).timestamp() * 1000
+                ),
             ).strip("\n")
             content = todo.encode("utf8")
             print(f"Creating task {s3key} for event {name}")
         s3client.put_object(Body=content, Bucket=AWS_S3_BUCKET, Key=s3key)
 
+
 def _update_entry(s3key, name, iso_now, due):
     existing = s3client.get_object(Bucket=AWS_S3_BUCKET, Key=s3key)
     original_content = existing["Body"].read().decode("utf8")
     content = original_content
-    todo_due = t2d(int(re.search(r'todo_due: (?P<v>.*)\n', content).group('v')) / 1000)
-    todo_completed = t2d(int(re.search(r'todo_completed: (?P<v>.*)\n', content).group('v')) / 1000)
+    # TODO this could just be one search
+    todo_due = t2d(int(re.search(r"todo_due: (?P<v>.*)\n", content).group("v")) / 1000)
+    todo_completed = t2d(
+        int(re.search(r"todo_completed: (?P<v>.*)\n", content).group("v")) / 1000
+    )
     utc_due = (due - due.utcoffset()).replace(tzinfo=None)
     if todo_completed > utc_due or utc_due < datetime.utcnow():
         return
@@ -161,17 +181,6 @@ def _update_entry(s3key, name, iso_now, due):
             recombined[idx] = f"{field} {iso_now}"
             break
     return "\n".join(recombined).encode("utf8")
-
-
-def main():
-    if not OAUTH_TOKEN_B64:
-        print("Please run gimme_token.py where there's a browser :(")
-        return
-    while True:
-        events = fetch_calendar_events()
-        if events:
-            create_joplin_entries(events)
-        time.sleep(POLL_SECONDS)
 
 
 if __name__ == "__main__":
